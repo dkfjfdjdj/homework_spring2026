@@ -31,7 +31,7 @@ class TrainConfig:
     data_dir: Path = Path("data")
 
     # The policy type -- either MSE or flow.
-    policy_type: PolicyType = "mse"
+    policy_type: PolicyType = "flow"
     # The number of denoising steps to use for the flow policy (has no effect for the MSE policy).
     flow_num_steps: int = 10
     # The action chunk size.
@@ -128,23 +128,30 @@ def run_training(config: TrainConfig) -> None:
     logger = Logger(log_dir)
 
     ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
-    optimizer=torch.optim.Adam(
-        model.parameters(),
-        lr=config.lr,
-        weight_decay=config.weight_decay,
-    )
+    optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=config.lr,
+    weight_decay=config.weight_decay,
+)
+
+    def train_step(state, action_chunk):
+        optimizer.zero_grad(set_to_none=True)
+        loss = model.compute_loss(state, action_chunk)
+        loss.backward()
+        optimizer.step()
+        return loss
+
+    #if device.type == "cuda":
+        #train_step = torch.compile(train_step)
+
     global_step = 0
     model.train()
     for epoch in range(config.num_epochs):
         for state, action_chunk in loader:
-            state=state.to(device)
-            action_chunk=action_chunk.to(device)
+            state = state.to(device)
+            action_chunk = action_chunk.to(device)
 
-            loss=model.compute_loss(state,action_chunk)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            loss = train_step(state, action_chunk)
 
             if global_step % config.log_interval == 0:
                 logger.log(
@@ -165,7 +172,7 @@ def run_training(config: TrainConfig) -> None:
                     logger=logger,
                 )
                 model.train()
-            global_step+=1
+            global_step += 1
     evaluate_policy(
         model=model,
         normalizer=normalizer,

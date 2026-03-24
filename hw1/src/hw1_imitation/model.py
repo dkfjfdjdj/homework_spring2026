@@ -90,21 +90,65 @@ class FlowMatchingPolicy(BasePolicy):
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
 
+        input_dim=state_dim+action_dim*chunk_size+1
+        output_dim=action_dim*chunk_size
+        dims = [input_dim, *hidden_dims, output_dim]
+        layers = []
+        for i in range(len(dims) - 2):
+            layers.append(nn.Linear(dims[i], dims[i + 1]))
+            layers.append(nn.ReLU())
+        layers.append(nn.Linear(dims[-2], dims[-1]))
+        self.net = nn.Sequential(*layers)    
+
+    def _predict_velocity(
+        self,
+        state: torch.Tensor,          # (B, state_dim)
+        action_chunk: torch.Tensor,   # (B, chunk_size, action_dim)
+        tau: torch.Tensor,            # (B, 1)
+    ) -> torch.Tensor:
+        B = state.shape[0]
+        action_flat = action_chunk.view(B, -1)
+        x = torch.cat([state, action_flat, tau], dim=1)
+        v = self.net(x)
+        return v.view(B, self.chunk_size, self.action_dim)
+
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        B = state.shape[0]
+        device = state.device
 
+        A_true=action_chunk
+        A0=torch.randn_like(A_true)
+        tau=torch.rand(B,1,device=device)
+        tau_expanded=tau.view(B,1,1)
+        A_tau=tau_expanded*A_true+(1-tau_expanded)*A0
+
+        target_velocity=(A_true-A0)
+        pred_velocity=self._predict_velocity(state, A_tau, tau)
+
+        return nn.functional.mse_loss(pred_velocity, target_velocity)
+
+    @torch.no_grad()
     def sample_actions(
         self,
         state: torch.Tensor,
         *,
         num_steps: int = 10,
     ) -> torch.Tensor:
-        raise NotImplementedError
-
+        
+        B= state.shape[0]
+        device=state.device
+        
+        A= torch.randn(B, self.chunk_size, self.action_dim, device=device)
+        dt=1.0/num_steps
+        for i in range(num_steps):
+            tau=torch.full((B,1), i*dt, device=device)
+            v=self._predict_velocity(state, A, tau)
+            A=A+v*dt
+        return A
 
 PolicyType: TypeAlias = Literal["mse", "flow"]
 
